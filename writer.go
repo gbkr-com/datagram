@@ -3,7 +3,6 @@ package datagram
 import (
 	"bytes"
 	"encoding/binary"
-	"math"
 )
 
 // A Writer provides methods to write a UDP payload.
@@ -64,9 +63,6 @@ func (w *Writer) WriteFloat64(v float64) error {
 func (w *Writer) Write(v []byte) (err error) {
 	if w.buffer == nil {
 		return ErrClosedWriter
-	}
-	if len(v) > math.MaxUint16 {
-		return ErrOverflow
 	}
 	if w.buffer.Cap() < len(v)+2 {
 		return ErrOverflow
