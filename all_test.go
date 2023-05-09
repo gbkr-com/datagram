@@ -91,7 +91,6 @@ func TestPayloadSize(t *testing.T) {
 }
 
 func TestSendAndReceive(t *testing.T) {
-	t.Skip()
 	//
 	// Create a sender and a receiver.
 	//
@@ -112,7 +111,7 @@ func TestSendAndReceive(t *testing.T) {
 			if app.IsDone(ctx) {
 				break
 			}
-			reader, address, err := receiver.Receive(20 * time.Millisecond)
+			reader, address, _, err := receiver.Receive(20 * time.Millisecond)
 			if err != nil {
 				if IsTimeout(err) {
 					return
@@ -150,16 +149,20 @@ func TestSendAndReceive(t *testing.T) {
 	cxl()
 }
 
-func TestMultiple(t *testing.T) {
-	// t.Skip()
+func TestHashedAndSequenced(t *testing.T) {
+	proto := &Protocol{
+		Hash:      42,
+		Sequenced: true,
+		Payload:   256,
+	}
 	//
 	// Create a sender and a receiver.
 	//
-	receiver, err := NewEndpoint(&testprotocol, 0, 8)
+	receiver, err := NewEndpoint(proto, 0, 8)
 	assert.Nil(t, err)
 	defer receiver.Close()
 	rcvaddr := receiver.LocalAddress()
-	sender, err := NewEndpoint(&testprotocol, 0, 8)
+	sender, err := NewEndpoint(proto, 0, 8)
 	assert.Nil(t, err)
 	defer sender.Close()
 	//
@@ -167,7 +170,7 @@ func TestMultiple(t *testing.T) {
 	//
 	timeout := 10 * time.Millisecond
 	blocking := new(sync.WaitGroup)
-	var received []int64
+	var seqs []uint64
 	//
 	// Receiving.
 	//
@@ -175,19 +178,22 @@ func TestMultiple(t *testing.T) {
 	go func() {
 		defer blocking.Done()
 		for {
-			reader, _, err := receiver.Receive(timeout)
+			reader, _, seq, err := receiver.Receive(timeout)
 			if IsTimeout(err) {
 				continue
 			}
 			if err != nil {
 				t.Error(err)
 			}
+			if reader == nil {
+				t.Error()
+			}
 			v, err := reader.ReadInt64()
 			if err != nil {
 				t.Error(err)
 			}
 			reader.Close()
-			received = append(received, v)
+			seqs = append(seqs, seq)
 			if v == 10 {
 				break
 			}
@@ -197,6 +203,7 @@ func TestMultiple(t *testing.T) {
 	// Sending.
 	//
 	go func() {
+		sender.SetSequence(100)
 		addr, _ := net.ResolveUDPAddr("udp", "localhost:"+strconv.Itoa(rcvaddr.Port))
 		for i := 0; i < 10; i++ {
 			writer := sender.Writer()
@@ -208,7 +215,6 @@ func TestMultiple(t *testing.T) {
 		}
 	}()
 	blocking.Wait()
-	if len(received) != 10 {
-		t.Error()
-	}
+	assert.Equal(t, 10, len(seqs))
+	assert.Equal(t, uint64(101), seqs[0])
 }

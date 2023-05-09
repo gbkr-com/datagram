@@ -25,9 +25,9 @@ import (
 // sending and receiving.
 type Endpoint struct {
 	protocol *Protocol
+	sequence uint64                   // Last written sequence number.
 	conn     *net.UDPConn             // The underlying connection.
 	zero     []byte                   // A zero filled payload.
-	remotes  map[string]*Connection   // All 'connections' with remote addresses.
 	buffers  *app.Pool[*bytes.Buffer] // Pool of payload buffers, used by readers and writers.
 	writers  *app.Pool[*Writer]       // Pool of writers.
 }
@@ -84,7 +84,6 @@ func NewEndpoint(protocol *Protocol, port, pool int) (*Endpoint, error) {
 		protocol: protocol,
 		conn:     conn,
 		zero:     make([]byte, protocol.Payload),
-		remotes:  make(map[string]*Connection),
 		buffers: app.NewPool(
 			pool,
 			app.WithPoolFactory(
@@ -111,21 +110,23 @@ func NewEndpoint(protocol *Protocol, port, pool int) (*Endpoint, error) {
 	return e, nil
 }
 
-func (e *Endpoint) manageConnection(addr *net.UDPAddr) *Connection {
-	str := addr.String()
-	rem, ok := e.remotes[str]
-	if !ok {
-		rem = &Connection{
-			remote: addr,
-		}
-		e.remotes[str] = rem
-	}
-	return rem
-}
-
 // LocalAddress returns the address of this end point.
 func (e *Endpoint) LocalAddress() *net.UDPAddr {
 	return e.conn.LocalAddr().(*net.UDPAddr)
+}
+
+// LastSequence returns the last written sequence number.
+func (e *Endpoint) LastSequence() uint64 {
+	return e.sequence
+}
+
+// SetSequence sets the last written sequence number.
+func (e *Endpoint) SetSequence(seq uint64) {
+	e.sequence = seq
+}
+
+func (e *Endpoint) incr() {
+	e.sequence++
 }
 
 // Writer returns a new writer.
@@ -133,11 +134,10 @@ func (e *Endpoint) Writer() *Writer {
 	w := e.writers.Next()
 	w.buffer = e.buffers.Next()
 	if e.protocol.Hash > 0 {
-		//
-		// NB the case where the payload size is insufficient to contain the
-		// protocol hash is detected when the end point is constructed.
-		//
 		protocolWrite(e.protocol, w)
+	}
+	if e.protocol.Sequenced {
+		sequenceWrite(e, w)
 	}
 	return w
 }
@@ -156,7 +156,6 @@ func (e *Endpoint) Send(writer *Writer, address *net.UDPAddr, timeout time.Durat
 	}
 	e.buffers.Recycle(writer.buffer)
 	e.writers.Recycle(writer)
-	e.manageConnection(address)
 	return
 }
 
@@ -164,7 +163,7 @@ func (e *Endpoint) Send(writer *Writer, address *net.UDPAddr, timeout time.Durat
 // the payload. That reader must be closed after use.
 // The returned reader may be nil: this happens when there is an error and also
 // when the incoming UDP datagram does not match the protocol.
-func (e *Endpoint) Receive(timeout time.Duration) (reader *Reader, addr *net.UDPAddr, err error) {
+func (e *Endpoint) Receive(timeout time.Duration) (reader *Reader, addr *net.UDPAddr, seq uint64, err error) {
 	if timeout > 0 {
 		if err = e.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 			return
@@ -200,7 +199,9 @@ func (e *Endpoint) Receive(timeout time.Duration) (reader *Reader, addr *net.UDP
 			return
 		}
 	}
-	e.manageConnection(addr)
+	if e.protocol.Sequenced {
+		seq, err = sequenceRead(e, reader)
+	}
 	return
 }
 

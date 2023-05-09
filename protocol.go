@@ -12,8 +12,9 @@ package datagram
 // The payload is the maximum data size expected with the protocol. Note
 // the constant MaxPayload in this package.
 type Protocol struct {
-	Hash    uint64
-	Payload uint16
+	Hash      uint64
+	Sequenced bool
+	Payload   uint16
 }
 
 func protocolWrite(protocol *Protocol, writer *Writer) error {
@@ -31,4 +32,13 @@ func protocolRead(protocol *Protocol, reader *Reader) (ok bool, err error) {
 	}
 	ok = true
 	return
+}
+
+func sequenceWrite(endpoint *Endpoint, writer *Writer) error {
+	endpoint.incr()
+	return writer.WriteUint64(endpoint.LastSequence())
+}
+
+func sequenceRead(endpoint *Endpoint, reader *Reader) (seq uint64, err error) {
+	return reader.ReadUint64()
 }
